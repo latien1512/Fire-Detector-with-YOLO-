@@ -1,7 +1,9 @@
 import time, json, os, csv
 from datetime import datetime
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 
 from ml_predictor import predict_hazard
 from DS18B20_Temperature_Sensor import get_temperature_data
@@ -12,36 +14,64 @@ from temporal_confirmation import TemporalConfirmation
 from relay_control import setup_relays, write_actuators, cleanup_relays
 from era_mqtt_client import setup_mqtt, publish_telemetry, stop_mqtt
 
-# ================= KẾT NỐI YOLO =================
+# ================= ĐỌC TRẠNG THÁI TỪ YOLO =================
 STATUS_FILE = "/dev/shm/fire_status.txt"
+IMAGE_FILE = "/dev/shm/latest_frame.jpg"
+
 def get_yolo_status():
     try:
         if os.path.exists(STATUS_FILE):
-            with open(STATUS_FILE, "r") as f: return f.read().strip() == "1"
-    except: return False
-    return False
-
-# ================= HÀM GỬI EMAIL CẢNH BÁO =================
-def send_alert_email(subject, body):
+            with open(STATUS_FILE, "r") as f:
+                val = f.read().strip()
+                if val in ["FIRE", "SMOKE", "SAFE"]:
+                    return val
+    except:
+        pass
+    return "SAFE"
+# ================= READ MANUAL CONTROL =================
+def read_manual_control():
     try:
-        # Nhớ trỏ đường dẫn tuyệt đối để chạy ngầm không bị lỗi
+        with open(MANUAL_FILE, "r") as f:
+            return json.load(f)
+
+    except:
+        return {
+            "mode": "AUTO",
+            "buzzer": False,
+            "fan": False,
+            "mist": False,
+            "emergency": False
+        }
+# ================= HÀM GỬI EMAIL CẢNH BÁO =================
+def send_alert_email(subject, body, attach_image=True):
+    try:
         with open('/home/pi/Desktop/Main_Project_Code_Python/emailpass.txt', 'r') as f:
             lines = f.read().splitlines()
             sender_email = lines[0]
             password = lines[1]
             receiver_email = lines[2]
 
-        msg = MIMEText(body)
+        msg = MIMEMultipart()
         msg['Subject'] = subject
         msg['From'] = sender_email
         msg['To'] = receiver_email
 
+        msg.attach(MIMEText(body, 'plain'))
+
+        if attach_image and os.path.exists(IMAGE_FILE):
+            with open(IMAGE_FILE, 'rb') as img_f:
+                img_data = img_f.read()
+                image = MIMEImage(img_data, name="Camera_Snapshot.jpg")
+                msg.attach(image)
+
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(sender_email, password)
             server.send_message(msg)
-        print(" 📧 [THÀNH CÔNG] Đã gửi Email cảnh báo đến chủ nhà!")
+
+        print(f" 📧 [SUCCESS] Email with photo report sent: {subject}")
+
     except Exception as e:
-        print(f" ⚠️ [LỖI] Không thể gửi Email: {e}")
+        print(f" ⚠️ [ERROR] Failed to Send Alert Email: {e}")
 
 # ================= TEMPORAL FILTER =================
 temporal_filter = TemporalConfirmation(
@@ -51,6 +81,9 @@ temporal_filter = TemporalConfirmation(
 
 # ================= CONFIG =================
 LOG_DIR = "logs"
+
+STATE_FILE = "/dev/shm/realtime_state.json"
+MANUAL_FILE = "/home/pi/Desktop/Smart_HMI/manual_control.json"
 JSONL_FILE = f"{LOG_DIR}/fire_realtime_ml.jsonl"
 CSV_FILE = f"{LOG_DIR}/fire_realtime_ml.csv"
 LOOP_INTERVAL = 1.0
@@ -78,9 +111,14 @@ if not csv_exists:
     ])
 
 # ================= EMAIL COOLDOWN SETUP =================
-last_gas_email_time = 0
-last_fire_email_time = 0
-EMAIL_COOLDOWN = 60 # Giới hạn: 60 giây mới gửi 1 mail cho cùng 1 sự kiện
+email_cooldowns = {
+    "FIRE_CONFIRM": 0,
+    "SMOKE_CONFIRM": 0,
+    "SUSPECT_FIRE": 0,
+    "SUSPECT_SMOKE": 0,
+    "GAS_LEAK": 0
+}
+EMAIL_DELAY = 60
 
 print("\n=== FIRE DETECTION SYSTEM – REALTIME CROSS-VERIFICATION MODE ===\n")
 
@@ -142,52 +180,110 @@ try:
         relay_active_sensor = temporal_result["relay_active"]
         actuator = temporal_result["actuator"].copy()
 
-        # ================== CHỐT KẾT QUẢ VỚI YOLO CAMERA =======================
-        yolo_fire = get_yolo_status()
-        yolo_str = "FIRE" if yolo_fire else "SAFE"
-        
+        # =================== MA TRẬN ĐỒNG THUẬN QUYẾT ĐỊNH ======================
+
+        yolo_str = get_yolo_status()
+
+        yolo_fire = (yolo_str == "FIRE")
+        yolo_smoke = (yolo_str == "SMOKE")
+
+        sensor_fire = (confirmed_hazard == "FIRE")
+        sensor_smoke = (confirmed_hazard == "SMOKE_AIR")
+
+        # FINAL DECISION BASED ON FUSION + TEMPORAL
         final_hazard = confirmed_hazard
         final_reason = confirmed_reason
+        actuator = temporal_result["actuator"].copy()
+        email_to_send = None
+        
+        # YOLO CROSS-CHECK ONLY
+        if yolo_fire:
+            final_hazard = "SUSPECT_FIRE"
+            final_reason = "FIRE SUSPECTED BY CAMERA"
+            actuator.update({
+                "buzzer": False,
+                "mist": False,
+                "fan": True,
+                "emergency": False
+            })
+            email_to_send = "SUSPECT_FIRE"
 
-        # Ma trận bù trừ chéo
-        if yolo_fire and confirmed_hazard == "FIRE":
-            final_reason = "ĐỒNG THUẬN TUYỆT ĐỐI (AI Camera + Cảm biến)"
-            final_hazard = "FIRE"
-            actuator.update({"buzzer": True, "fan": True, "mist": True, "emergency": True})
-        elif yolo_fire and confirmed_hazard != "FIRE":
-            final_reason = "CAMERA BÁO TRƯỚC (Cảm biến chưa tới ngưỡng)"
-            final_hazard = "FIRE"
-            actuator.update({"buzzer": True, "fan": True, "mist": True, "emergency": True})
-        elif not yolo_fire and confirmed_hazard == "FIRE":
-            final_reason = "CẢM BIẾN BÁO CHÁY (Camera bị che khuất/điểm mù)"
-            final_hazard = "FIRE"
-            actuator.update({"buzzer": True, "fan": True, "mist": True, "emergency": True})
+        elif yolo_smoke and confirmed_hazard not in ["SMOKE_AIR", "FIRE"]:
+            final_hazard = "SUSPECT_SMOKE"
+            final_reason = "SUSPECT SMOKE: Camera detected smoke but fusion/temporal has not confirmed yet"
+            actuator.update({
+                "buzzer": False,
+                "fan": True,
+                "mist": False,
+                "emergency": False
+            })
+            email_to_send = "SUSPECT_SMOKE"
 
-        # Thực thi Rơ-le với kết quả đã gộp
+        if confirmed_hazard == "FIRE":
+            email_to_send = "FIRE_CONFIRM"
+
+        elif confirmed_hazard == "SMOKE_AIR":
+            email_to_send = "SMOKE_CONFIRM"
+
+        elif confirmed_hazard == "GAS_LEAK":
+            email_to_send = "GAS_LEAK"
+            
+        # =================== MANUAL OVERRIDE FROM HMI ========================
+        manual = read_manual_control()
+
+        if manual.get("mode") == "MANUAL":
+            actuator = {
+                "buzzer": bool(manual.get("buzzer", False)),
+                "fan": bool(manual.get("fan", False)),
+                "mist": bool(manual.get("mist", False)),
+                "emergency": bool(manual.get("emergency", False))
+            }
+
+            final_reason = "MANUAL OVERRIDE FROM HMI"
+
+        # RELAY ACTIVATED AFTER MANUAL CONTROL IS PROCESSED
         write_actuators(actuator)
         final_relay_active = any(actuator.values())
-
-        # ============= KỊCH BẢN GỬI EMAIL CẢNH BÁO ===============
-        
+            
+        # ================= SMART EMAIL ALERT SYSTEM =================
         current_time = time.time()
 
-        # 1. Kịch bản Rò rỉ khí GAS
-        if final_hazard == "GAS_LEAK" or confirmed_hazard == "GAS_LEAK":
-            if current_time - last_gas_email_time > EMAIL_COOLDOWN:
-                subject = "🚨 CẢNH BÁO KHẨN: RÒ RỈ KHÍ GAS 🚨"
-                body = f"Hệ thống phát hiện nồng độ khí Gas nguy hiểm trong khu vực!\n\nChi tiết:\n- Mức độ Gas (MQ-2): {mq2_hi}\n- Cảnh báo từ: Cảm biến phần cứng\n- Đã tự động kích hoạt Rơ-le an toàn.\n\nVui lòng kiểm tra hiện trường ngay lập tức!"
-                print(" ✉️ Phát hiện GAS - Đang gửi Email...")
-                send_alert_email(subject, body)
-                last_gas_email_time = current_time
+        if email_to_send and (current_time - email_cooldowns[email_to_send] > EMAIL_DELAY):
 
-        # 2. Kịch bản Hỏa hoạn (Có so sánh chéo)
-        if final_hazard == "FIRE":
-            if current_time - last_fire_email_time > EMAIL_COOLDOWN:
-                subject = "🔥 CẢNH BÁO KHẨN CẤP: PHÁT HIỆN HỎA HOẠN 🔥"
-                body = f"Hệ thống giám sát vừa phát hiện sự cố HỎA HOẠN!\n\n=== ĐÁNH GIÁ CHÉO (CROSS-VERIFICATION) ===\n- KẾT LUẬN: {final_reason}\n- Tín hiệu Camera YOLO: {yolo_str}\n- Tín hiệu Cảm biến: {confirmed_hazard}\n\n=== THÔNG SỐ VẬT LÝ ===\n- Nhiệt độ: {temp_c}°C ({temp_status})\n- Khói (MQ-135): {mq135_hi}\n\nToàn bộ hệ thống chữa cháy đã được kích hoạt!"
-                print(" ✉️ Phát hiện LỬA - Đang gửi Email...")
-                send_alert_email(subject, body)
-                last_fire_email_time = current_time
+            sensor_info = f"""
+        === RECORDED PHYSICAL PARAMETERS ===
+        - Current Temperature: {temp_c}°C ({temp_status})
+        - Flammable Gas Level (MQ-2): {mq2_hi}
+        - Smoke/Dust Level (MQ-135): {mq135_hi}
+        - Harmful VOC Concentration: {voc_ppm} ppm
+        ====================================
+            """
+
+            subject = ""
+            body = ""
+
+            if email_to_send == "FIRE_CONFIRM":
+                subject = "🔥 RED ALERT: FIRE CONFIRMED 🔥"
+                body = f"The system has CONFIRMED A FIRE through both the AI Camera and Sensors!\n\n- The SIREN and FIRE SUPPRESSION WATER MIST PUMP have been automatically activated.\n- Please check the attached现场 image below and evacuate immediately!\n\n{sensor_info}"
+
+            elif email_to_send == "SMOKE_CONFIRM":
+                subject = "🌫 ALERT: DENSE SMOKE CONFIRMED 🌫"
+                body = f"The system has CONFIRMED SMOKE through both the AI Camera and Sensors!\n\n- The SIREN and EXHAUST FAN have been automatically activated.\n- Please check the attached image and inspect the area immediately.\n\n{sensor_info}"
+
+            elif email_to_send == "SUSPECT_FIRE":
+                subject = "⚠️ WARNING: SUSPECTED FIRE DETECTED ⚠️"
+                body = f"The system has detected possible signs of Fire.\n\n- Status: {final_reason}\n- For safety reasons, the fire suppression system has NOT been automatically activated yet.\n- Please verify through the Camera feed. If a real fire is detected, manually activate the pump via the E-Ra application!\n\n{sensor_info}"
+
+            elif email_to_send == "SUSPECT_SMOKE":
+                subject = "⚠️ WARNING: SUSPECTED SMOKE DETECTED ⚠️"
+                body = f"The system has detected possible signs of Smoke.\n\n- Status: {final_reason}\n- The exhaust fan and siren have NOT been automatically activated to avoid false alarms.\n- Please manually inspect the situation and control the system through the E-Ra application if necessary.\n\n{sensor_info}"
+
+            elif email_to_send == "GAS_LEAK":
+                subject = "🚨 EMERGENCY ALERT: GAS LEAK DETECTED 🚨"
+                body = f"A dangerous gas leak has been detected! The ventilation fan has been activated automatically. Please inspect and shut off the gas valve immediately!\n\n{sensor_info}"
+
+            send_alert_email(subject, body, attach_image=True)
+            email_cooldowns[email_to_send] = current_time
 
         # ---------- JSONL LOG (ML INFERENCE) ----------
         ml_record = {
@@ -218,6 +314,53 @@ try:
             "buzzer": actuator.get("buzzer"), "fan": actuator.get("fan"), "mist": actuator.get("mist"), "emergency": actuator.get("emergency")
         }
         mqtt_ok = publish_telemetry(era_payload)
+
+        # ================= REALTIME STATE FOR HMI =================
+        realtime_state = {
+            "control_mode": manual["mode"],
+            "system_status": final_hazard,
+            "final_reason": final_reason,
+
+            "temp_c": temp_c,
+            "temp_status": temp_status,
+            "temp_trend": temp_trend,
+            "heat_rise": temp_rise,
+
+            "mq2_hi": mq2_hi,
+            "mq135_hi": mq135_hi,
+            "voc_ppm": voc_ppm,
+
+            "severity_score": severity_score,
+            "severity_level": severity_level,
+            "action_level": action_level,
+            "severity_reason": severity_reason,
+
+            "ml_hazard": ml_hazard,
+            "fusion_hazard": fusion_hazard,
+            "fusion_reason": fusion_reason,
+            "fusion_source": fusion_source,
+            "fusion_urgency": fusion_urgency,
+
+            "yolo_status": yolo_str,
+
+            "confirmed_hazard": confirmed_hazard,
+            "confirmed_reason": confirmed_reason,
+            "streak": temporal_result["streak"],
+            "required_count": temporal_result["required_count"],
+
+            "buzzer": actuator.get("buzzer"),
+            "fan": actuator.get("fan"),
+            "mist": actuator.get("mist"),
+            "emergency": actuator.get("emergency"),
+
+            "timestamp": time.time()
+        }
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump(realtime_state, f)
+        except:
+            pass
+                
         print(f" ☁️ E-Ra MQTT → {'SENT' if mqtt_ok else 'NOT CONNECTED'}")
         
         # ---------- TERMINAL OUTPUT ----------
