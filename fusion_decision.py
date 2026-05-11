@@ -30,10 +30,10 @@ def _build_result(
         "source": source,          # hard_rule / physics / ml / severity_override
         "urgency": urgency,        # immediate / confirm / monitor
         "actuator": {
-            "buzzer": bool(buzzer),
-            "fan": bool(fan),
-            "mist": bool(mist),
-            "emergency": bool(emergency),
+        "buzzer": bool(buzzer),
+        "fan": bool(fan),
+        "mist": bool(mist),
+        "emergency": bool(emergency),
         }
     }
 
@@ -246,7 +246,7 @@ def fusion_decision(
             buzzer=True,
             fan=True,
             mist=False,
-            emergency=False,
+            emergency=True,
         )
 
     # ML says SAFE but thermal pattern is dangerous
@@ -277,7 +277,7 @@ def fusion_decision(
                 buzzer=True,
                 fan=True,
                 mist=True,
-                emergency=False,
+                emergency=True,
             )
 
         if physics_label == GAS_LEAK:
@@ -289,7 +289,7 @@ def fusion_decision(
                 buzzer=True,
                 fan=True,
                 mist=False,
-                emergency=False,
+                emergency=True,
             )
 
         if physics_label == VOC_CHEMICAL:
@@ -301,7 +301,7 @@ def fusion_decision(
                 buzzer=True,
                 fan=True,
                 mist=False,
-                emergency=False,
+                emergency=True,
             )
 
         if physics_label == SMOKE_AIR:
@@ -310,7 +310,7 @@ def fusion_decision(
                 reason=f"{physics_reason} | Physics accepted over ML",
                 source="physics",
                 urgency="confirm",
-                buzzer=False,
+                buzzer=True,
                 fan=True,
                 mist=False,
                 emergency=False,
@@ -326,7 +326,7 @@ def fusion_decision(
             buzzer=True,
             fan=True,
             mist=True,
-            emergency=False,
+            emergency=True,
         )
 
     if ml_label == GAS_LEAK:
@@ -338,7 +338,7 @@ def fusion_decision(
             buzzer=True,
             fan=True,
             mist=False,
-            emergency=False,
+            emergency=True,
         )
 
     if ml_label == VOC_CHEMICAL:
@@ -350,7 +350,7 @@ def fusion_decision(
             buzzer=True,
             fan=True,
             mist=False,
-            emergency=False,
+            emergency=True,
         )
 
     if ml_label == SMOKE_AIR:
@@ -359,7 +359,7 @@ def fusion_decision(
             reason=f"ML accepted | severity={severity_score}, action={action_level}",
             source="ml",
             urgency="confirm",
-            buzzer=False,
+            buzzer=True,
             fan=True,
             mist=False,
             emergency=False,
