@@ -9,7 +9,7 @@ from picamera2 import Picamera2
 # ================= HIỂN THỊ X11 & ĐỒNG BỘ RAM =================
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 STATUS_FILE = "/dev/shm/fire_status.txt"
-IMAGE_FILE = "/dev/shm/latest_frame.jpg" # BIẾN MỚI: Đường dẫn lưu ảnh nháp trên RAM
+IMAGE_FILE = "/dev/shm/latest_frame.jpg"
 
 def update_status(val_str):
     try:
