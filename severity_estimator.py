@@ -338,8 +338,6 @@ def estimate_severity(
         "rule_strengths": {k: round(v, 3) for k, v in rules.items()},
     }
 
-
-
 # Hard override result builder
 def _build_override_result(
     score: float,
