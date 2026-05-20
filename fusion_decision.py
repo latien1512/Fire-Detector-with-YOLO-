@@ -51,37 +51,9 @@ def fusion_decision(
     severity_level: str,
     action_level: str,
 ):
-    """
-    Instant fusion decision.
 
-    Inputs:
-        temp_c         : current temperature
-        temp_status    : safe / warning / danger
-        temp_rise      : normal / caution / high_risk
-        mq2_hi         : MQ-2 HI
-        mq135_hi       : MQ-135 HI
-        voc_ppm        : VOC ppm
-        ml_label       : ML predicted hazard label (int)
-        severity_score : 0..100
-        severity_level : LOW / MEDIUM / HIGH / CRITICAL
-        action_level   : MONITOR / ALERT / INTERVENE / EMERGENCY
-
-    Returns dict:
-        {
-            "label": int,
-            "hazard": str,
-            "reason": str,
-            "source": str,
-            "urgency": str,
-            "actuator": {...}
-        }
-    """
-
-    # =====================================================
     # 1) HARD SAFETY OVERRIDE
-    # =====================================================
 
-    # Extreme temperature -> immediate FIRE
     if temp_c >= 90:
         return _build_result(
             label=FIRE,
@@ -133,11 +105,8 @@ def fusion_decision(
             emergency=True,
         )
 
-    # =====================================================
+
     # 2) SENSOR PHYSICS INTERPRETATION
-    # =====================================================
-    # Do NOT default to SAFE here.
-    # If no dominant physical pattern appears, keep physics_label = None.
 
     physics_label = None
     physics_reason = "No dominant physical hazard pattern"
@@ -162,11 +131,9 @@ def fusion_decision(
         physics_label = FIRE
         physics_reason = "Physics: heat buildup + gas/smoke signature"
 
-    # =====================================================
+    
     # 3) SEVERITY-BASED OVERRIDE / SUPPORT
-    # =====================================================
 
-    # Severity indicates very dangerous condition
     if severity_level == "CRITICAL":
         # If strong heat exists, treat as FIRE
         if temp_c >= 55 or temp_rise == "high_risk":
@@ -219,9 +186,8 @@ def fusion_decision(
             emergency=False,
         )
 
-    # =====================================================
+
     # 4) ML SANITY CHECK
-    # =====================================================
 
     # ML says FIRE but no heat evidence -> likely smoke, not confirmed fire
     if ml_label == FIRE and temp_c < 45 and temp_rise == "normal":
@@ -262,9 +228,8 @@ def fusion_decision(
             emergency=True,
         )
 
-    # =====================================================
+
     # 5) FINAL FUSION DECISION
-    # =====================================================
 
     # If physics has a meaningful interpretation, prefer it over ML
     if physics_label is not None:
