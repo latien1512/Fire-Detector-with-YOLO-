@@ -12,7 +12,6 @@ HAZARD_NAME = {
     FIRE: "FIRE"
 }
 
-
 def _build_result(
     label: int,
     reason: str,
@@ -52,8 +51,8 @@ def fusion_decision(
     action_level: str,
 ):
 
-    # 1) HARD SAFETY OVERRIDE
-
+    #============================ HARD SAFETY OVERRIDE ============================
+    # Extreme temperature -> immediate FIRE
     if temp_c >= 90:
         return _build_result(
             label=FIRE,
@@ -106,8 +105,8 @@ def fusion_decision(
         )
 
 
-    # 2) SENSOR PHYSICS INTERPRETATION
-
+    #============================ SENSOR PHYSICS INTERPRETATION ============================
+    # If no dominant physical pattern appears, keep physics_label = None.
     physics_label = None
     physics_reason = "No dominant physical hazard pattern"
 
@@ -131,9 +130,9 @@ def fusion_decision(
         physics_label = FIRE
         physics_reason = "Physics: heat buildup + gas/smoke signature"
 
-    
-    # 3) SEVERITY-BASED OVERRIDE / SUPPORT
 
+    #============================ SEVERITY-BASED OVERRIDE / SUPPORT ============================
+    # Severity indicates very dangerous condition
     if severity_level == "CRITICAL":
         # If strong heat exists, treat as FIRE
         if temp_c >= 55 or temp_rise == "high_risk":
@@ -187,21 +186,7 @@ def fusion_decision(
         )
 
 
-    # 4) ML SANITY CHECK
-
-    # ML says FIRE but no heat evidence -> likely smoke, not confirmed fire
-    if ml_label == FIRE and temp_c < 45 and temp_rise == "normal":
-        return _build_result(
-            label=SMOKE_AIR,
-            reason="ML sanity check: ML predicted FIRE but no supporting thermal evidence",
-            source="ml",
-            urgency="confirm",
-            buzzer=True,
-            fan=True,
-            mist=False,
-            emergency=False,
-        )
-
+    #============================ ML SANITY CHECK ============================
     # ML says SAFE but sensor strongly suggests gas
     if ml_label == SAFE and mq2_hi >= 2.0 and voc_ppm < 120:
         return _build_result(
@@ -229,8 +214,7 @@ def fusion_decision(
         )
 
 
-    # 5) FINAL FUSION DECISION
-
+    #============================ FINAL FUSION DECISION ============================
     # If physics has a meaningful interpretation, prefer it over ML
     if physics_label is not None:
         if physics_label == FIRE:
