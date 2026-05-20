@@ -198,15 +198,15 @@ try:
         
         # YOLO CROSS-CHECK ONLY
         if yolo_fire:
-            final_hazard = "SUSPECT_FIRE"
-            final_reason = "FIRE SUSPECTED BY CAMERA"
+            final_hazard = "FIRE"
+            final_reason = "FIRE RECORDED BY CAMERA"
             actuator.update({
-                "buzzer": False,
-                "mist": False,
+                "buzzer": True,
+                "mist": True,
                 "fan": True,
-                "emergency": False
+                "emergency": True
             })
-            email_to_send = "SUSPECT_FIRE"
+            email_to_send = "FIRE_CONFIRM"
 
         elif yolo_smoke and confirmed_hazard not in ["SMOKE_AIR", "FIRE"]:
             final_hazard = "SUSPECT_SMOKE"
